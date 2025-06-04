@@ -124,13 +124,13 @@ const calculateLightPath = (
   const n_phi = -vx * Math.sin(phi0) + vy * Math.cos(phi0);
 
   // Affine-parameter scale κ is arbitrary – choose 1
-  let p_r0 = n_r;                // ṙ(0)
+  const p_r0 = n_r;                // ṙ(0)
   const L = n_phi * r0;          // conserved angular momentum
 
   /* ------------ derivative function -------------------------------------- */
-  const derivs = ([r, phi, p_r]: [number, number, number]):
+  const derivs = ([r, _phi, p_r]: [number, number, number]):
     [number, number, number] => {
-    const f = 1 - effectiveRs / r;
+    const _f = 1 - effectiveRs / r;
     const dVdr = L * L * (-2 / (r ** 3) + (3 * effectiveRs) / (r ** 4));
     return [
       /* dr/dλ   */ p_r,
@@ -657,7 +657,7 @@ export default function BlackHole() {
         >
           {lasers.map((laser) => {
             // Calculate the distance to the screen edge
-            const distance = calculateDistanceToEdge(
+            const _distance = calculateDistanceToEdge(
               laser.x + size.width / 2,
               laser.y + size.height / 2,
               laser.angle,
@@ -666,7 +666,7 @@ export default function BlackHole() {
             );
             
             // Calculate distance in Schwarzschild radius units
-            const distanceInRs = calculateDistanceInRs(laser.x, laser.y, BH_SIZE);
+            const _distanceInRs = calculateDistanceInRs(laser.x, laser.y, BH_SIZE);
             
             return (
               <div
