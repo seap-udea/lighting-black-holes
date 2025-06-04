@@ -47,75 +47,137 @@ const calculateDistanceInRs = (x: number, y: number, BH_SIZE: number): number =>
   return distanceFromCenter / blackHoleRadius;
 };
 
-// Function to calculate points along the light path
+/**
+ * Integrate a *photon* geodesic in the equatorial plane (θ = π/2) of
+ * a Schwarzschild black hole, starting from a screen point and angle.
+ *
+ * All lengths are in *pixels*; we simply interpret the on-screen
+ * "black-hole radius"  bhSize*0.25  as the Schwarzschild radius r_s.
+ *
+ * The geodesic equations used are
+ *   r'   = p_r
+ *   φ'   =  L / r²
+ *   p_r' = -½ dV_eff/dr ,   with  V_eff = f L² / r² ,  f = 1 - r_s/r
+ *
+ * where ( ' ) denotes d/dλ (affine parameter) and
+ *   L = r₀² φ̇₀  is fixed by the initial direction.
+ */
 const calculateLightPath = (
   startX: number,
   startY: number,
-  angle: number,
+  angleDeg: number,
   width: number,
   height: number,
-  bhSize: number
+  bhSize: number,
+  zoom: number,
+  gravityEnabled: boolean
 ): { x: number; y: number; distToCenter: number }[] => {
-  const points: { x: number; y: number; distToCenter: number }[] = [];
-  const stepSize = 10; // Distance between dots
-  const angleRad = (angle * Math.PI) / 180;
-  
-  // Direction vector
-  const dx = Math.cos(angleRad);
-  const dy = Math.sin(angleRad);
-  
-  // Black hole parameters
-  const blackHoleRadius = bhSize * 0.25;
+  /* ------------ helpers -------------------------------------------------- */
+  const rk4 = (
+    y: [number, number, number],       // [r, φ, p_r]
+    h: number,
+    derivs: (y: [number, number, number]) => [number, number, number]
+  ): [number, number, number] => {
+    const k1 = derivs(y);
+    const k2 = derivs([
+      y[0] + 0.5 * h * k1[0],
+      y[1] + 0.5 * h * k1[1],
+      y[2] + 0.5 * h * k1[2],
+    ]);
+    const k3 = derivs([
+      y[0] + 0.5 * h * k2[0],
+      y[1] + 0.5 * h * k2[1],
+      y[2] + 0.5 * h * k2[2],
+    ]);
+    const k4 = derivs([
+      y[0] + h * k3[0],
+      y[1] + h * k3[1],
+      y[2] + h * k3[2],
+    ]);
+    return [
+      y[0] + (h / 6) * (k1[0] + 2 * k2[0] + 2 * k3[0] + k4[0]),
+      y[1] + (h / 6) * (k1[1] + 2 * k2[1] + 2 * k3[1] + k4[1]),
+      y[2] + (h / 6) * (k1[2] + 2 * k2[2] + 2 * k3[2] + k4[2]),
+    ];
+  };
+
+  /* ------------ screen → BH-centric coordinates -------------------------- */
   const centerX = width / 2;
   const centerY = height / 2;
-  
-  // Convert start position to relative coordinates
-  const relativeStartX = startX - centerX;
-  const relativeStartY = startY - centerY;
-  
-  let currentX = relativeStartX;
-  let currentY = relativeStartY;
-  
-  let steps = 0;
-  while (true) {
-    // Calculate distance to black hole center in relative coordinates
-    const distToCenter = Math.sqrt(currentX * currentX + currentY * currentY);
-    
-    // Convert distance to Schwarzschild radius units
-    const distInRs = distToCenter / blackHoleRadius;
-    
-    // Stop if we hit the black hole
-    if (distInRs <= 1) {
-      break;
-    }
-    
-    // Stop if we hit the screen edge
-    if (
-      currentX + centerX < 0 || 
-      currentX + centerX > width || 
-      currentY + centerY < 0 || 
-      currentY + centerY > height
-    ) {
-      break;
-    }
-    
-    // Add current point with distance in Rs units
-    points.push({ 
-      x: currentX + centerX, 
-      y: currentY + centerY, 
-      distToCenter: distInRs
-    });
-    
-    // Move to next point
-    currentX += dx * stepSize;
-    currentY += dy * stepSize;
+  const rs = bhSize * 0.25;                       // Schwarzschild radius
+  const massFactor = gravityEnabled ? 1 : 0;      // Mass factor for gravity
+  const effectiveRs = rs * massFactor;            // Effective Schwarzschild radius
+  const relX0 = startX - centerX;
+  const relY0 = startY - centerY;
 
-    steps++;
-    if(steps > 50) {
-      //break;
-    }
+  // Polar coords of the starting point
+  const r0 = Math.hypot(relX0, relY0);
+  const phi0 = Math.atan2(relY0, relX0);
+
+  // Initial *Euclidean* direction
+  const angle = (angleDeg * Math.PI) / 180;
+  const vx = Math.cos(angle);
+  const vy = Math.sin(angle);
+
+  // Components along {e_r, e_φ}
+  const n_r = vx * Math.cos(phi0) + vy * Math.sin(phi0);
+  const n_phi = -vx * Math.sin(phi0) + vy * Math.cos(phi0);
+
+  // Affine-parameter scale κ is arbitrary – choose 1
+  let p_r0 = n_r;                // ṙ(0)
+  const L = n_phi * r0;          // conserved angular momentum
+
+  /* ------------ derivative function -------------------------------------- */
+  const derivs = ([r, phi, p_r]: [number, number, number]):
+    [number, number, number] => {
+    const f = 1 - effectiveRs / r;
+    const dVdr = L * L * (-2 / (r ** 3) + (3 * effectiveRs) / (r ** 4));
+    return [
+      /* dr/dλ   */ p_r,
+      /* dφ/dλ   */ L / (r * r),
+      /* dp_r/dλ */ -0.5 * dVdr,
+    ];
+  };
+
+  /* ------------ integration loop ----------------------------------------- */
+  const h = rs * 0.01;           // Smaller step size for better accuracy
+  const maxSteps = 4000;         // Increased max steps for longer paths
+  const points: { x: number; y: number; distToCenter: number }[] = [];
+
+  // Calculate maximum distance based on zoom
+  const maxDistance = Math.max(width, height) * (1.5 / zoom);
+
+  let yState: [number, number, number] = [r0, phi0, p_r0];
+
+  for (let step = 0; step < maxSteps; step++) {
+    const [r, phi, _pr] = yState;
+
+    // stop if we cross the horizon
+    if (r <= effectiveRs * 1.001) break;
+
+    // convert back to screen coords
+    const xPix = r * Math.cos(phi) + centerX;
+    const yPix = r * Math.sin(phi) + centerY;
+
+    // Calculate distance from center
+    const distFromCenter = Math.hypot(xPix - centerX, yPix - centerY);
+
+    // stop if we exceed maximum distance or leave the canvas
+    const factor = 2/zoom;
+    if (distFromCenter > maxDistance || 
+        xPix < -factor*width || xPix > width * factor || 
+        yPix < -factor*height || yPix > height * factor) break;
+
+    points.push({
+      x: xPix,
+      y: yPix,
+      distToCenter: zoom,
+    });
+
+    // one RK4 step
+    yState = rk4(yState, h, derivs);
   }
-  
+
   return points;
 };
 
@@ -124,10 +186,26 @@ const normalizeAngle = (angle: number): number => {
   return ((angle % 360) + 360) % 360;
 };
 
+// Function to generate stars with consistent positions
+const generateStars = (width: number, height: number) => {
+  return Array.from({ length: STAR_COUNT }, (_, i) => {
+    // Use a deterministic seed based on the index
+    const seed = i * 16807 % 2147483647;
+    const x = (seed % width);
+    const y = ((seed * 16807) % 2147483647) % height;
+    const r = ((seed * 16807) % 2147483647) % STAR_SIZE + 0.2;
+    const o = ((seed * 16807) % 2147483647) % 0.7 + 0.3;
+    return { x, y, r, o };
+  });
+};
+
 export default function BlackHole() {
   const [zoom, setZoom] = useState(1);
-  const minZoom = 0.5;
+  const minZoom = 0.2;
   const maxZoom = 2.5;
+  const [showGrid, setShowGrid] = useState(false);
+  const [gravityEnabled, setGravityEnabled] = useState(false);
+  const [editingLaser, setEditingLaser] = useState<{ id: number; x: string; y: string; angle: string } | null>(null);
 
   // Initialize with empty arrays and default size
   const [size, setSize] = useState({ width: 800, height: 800 });
@@ -147,13 +225,8 @@ export default function BlackHole() {
       const newSize = { width: window.innerWidth, height: window.innerHeight };
       setSize(newSize);
       
-      // Generate stars only on the client side
-      const newStars = Array.from({ length: STAR_COUNT }, () => ({
-        x: Math.random() * newSize.width,
-        y: Math.random() * newSize.height,
-        r: Math.random() * STAR_SIZE + 0.2,
-        o: Math.random() * 0.7 + 0.3,
-      }));
+      // Generate stars with consistent positions
+      const newStars = generateStars(newSize.width, newSize.height);
       setStars(newStars);
     }
     
@@ -203,7 +276,7 @@ export default function BlackHole() {
     const relativeY = (y - centerY) / zoom;
     
     // Calculate distance from click to black hole center
-    const distanceFromCenter = Math.sqrt(relativeX * relativeX + relativeY * relativeY);
+    const distanceFromCenter = Math.hypot(relativeX, relativeY);
     
     // Black hole radius (25% of BH_SIZE)
     const blackHoleRadius = (BH_SIZE * 0.25) / zoom;
@@ -214,31 +287,13 @@ export default function BlackHole() {
         id: nextId,
         x: relativeX,
         y: relativeY,
-        fired: false,
-        angle: 0, // Zero inclination
+        fired: true,
+        angle: e.shiftKey ? 90 : 0, // Set 90 degrees if shift is pressed, otherwise 0
         direction: 'right', // Default direction
       };
       setLasers((prev) => [...prev, newLaser]);
       setNextId((prev) => prev + 1);
     }
-  };
-
-  // Handle click on a laser to fire it
-  const handleLaserClick = (e: React.MouseEvent<HTMLDivElement>, id: number) => {
-    if (isDragging) return;
-    e.stopPropagation();
-    
-    const rect = e.currentTarget.getBoundingClientRect();
-    const laserX = rect.left + rect.width / 2;
-    
-    // Determine direction based on which side of the laser was clicked
-    const direction = e.clientX < laserX ? 'left' : 'right';
-    
-    setLasers((prev) =>
-      prev.map((laser) =>
-        laser.id === id ? { ...laser, fired: true, direction } : laser
-      )
-    );
   };
 
   // Handle double-click to remove a laser
@@ -260,12 +315,66 @@ export default function BlackHole() {
         y: e.clientY - rect.top,
       });
     }
-    // Right click for rotating
+    // Right click for rotating or editing
     else if (e.button === 2) {
       e.preventDefault();
-      setRotatingLaserId(id);
-      setLastMouseX(e.clientX);
+      if (e.shiftKey) {
+        // Find the laser being edited
+        const laser = lasers.find(l => l.id === id);
+        if (laser) {
+          // Convert coordinates to Rs units
+          const xInRs = (laser.x * zoom) / (BH_SIZE * 0.25);
+          const yInRs = (laser.y * zoom) / (BH_SIZE * 0.25);
+          setEditingLaser({
+            id,
+            x: xInRs.toFixed(2),
+            y: yInRs.toFixed(2),
+            angle: laser.angle.toFixed(2)
+          });
+        }
+      } else {
+        setRotatingLaserId(id);
+        setLastMouseX(e.clientX);
+      }
     }
+  };
+
+  // Handle input changes for laser editing
+  const handleLaserEdit = (field: 'x' | 'y' | 'angle', value: string) => {
+    if (editingLaser) {
+      setEditingLaser({
+        ...editingLaser,
+        [field]: value
+      });
+    }
+  };
+
+  // Handle saving edited laser values
+  const handleSaveLaserEdit = () => {
+    if (editingLaser) {
+      // Convert Rs units back to screen coordinates
+      const xInPixels = (parseFloat(editingLaser.x) * BH_SIZE * 0.25) / zoom;
+      const yInPixels = (parseFloat(editingLaser.y) * BH_SIZE * 0.25) / zoom;
+      
+      setLasers(prev =>
+        prev.map(laser =>
+          laser.id === editingLaser.id
+            ? {
+                ...laser,
+                x: xInPixels,
+                y: yInPixels,
+                angle: parseFloat(editingLaser.angle)
+              }
+            : laser
+        )
+      );
+      setEditingLaser(null);
+    }
+  };
+
+  // Handle canceling laser edit
+  const handleCancelLaserEdit = () => {
+    setEditingLaser(null);
   };
 
   // Handle mouse move to drag or rotate the laser
@@ -359,6 +468,38 @@ export default function BlackHole() {
           >
             {allLasersOn ? 'Turn Off All' : 'Turn On All'}
           </button>
+          {/* Grid Toggle Button */}
+          <div className="flex items-center justify-between">
+            <span className="text-white/80 text-sm">Show Grid</span>
+            <button
+              className={`relative w-12 h-6 rounded-full transition-colors duration-200 ${
+                showGrid ? 'bg-blue-500' : 'bg-gray-600'
+              }`}
+              onClick={() => setShowGrid(!showGrid)}
+            >
+              <div
+                className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-transform duration-200 ${
+                  showGrid ? 'left-7' : 'left-1'
+                }`}
+              />
+            </button>
+          </div>
+          {/* Gravity Toggle Button */}
+          <div className="flex items-center justify-between">
+            <span className="text-white/80 text-sm">Gravitation</span>
+            <button
+              className={`relative w-12 h-6 rounded-full transition-colors duration-200 ${
+                gravityEnabled ? 'bg-blue-500' : 'bg-gray-600'
+              }`}
+              onClick={() => setGravityEnabled(!gravityEnabled)}
+            >
+              <div
+                className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-transform duration-200 ${
+                  gravityEnabled ? 'left-7' : 'left-1'
+                }`}
+              />
+            </button>
+          </div>
         </div>
 
         {/* Instructions */}
@@ -366,7 +507,6 @@ export default function BlackHole() {
           <h2 className="text-lg font-semibold">How to Use</h2>
           <ul className="space-y-2 text-sm">
             <li>• Click anywhere to place a laser</li>
-            <li>• Click on a laser to fire it</li>
             <li>• Right-click and drag to rotate</li>
             <li>• Left-click and drag to move</li>
             <li>• Double-click to remove a laser</li>
@@ -401,6 +541,102 @@ export default function BlackHole() {
         onContextMenu={handleContextMenu}
         tabIndex={0}
       >
+        {/* Background overlay when editing */}
+        {editingLaser && (
+          <div
+            className="absolute inset-0 z-30"
+            style={{ pointerEvents: "auto" }}
+            onClick={(e) => {
+              e.stopPropagation();
+              handleCancelLaserEdit();
+            }}
+          />
+        )}
+
+        {/* Coordinate Grid */}
+        {showGrid && (
+          <div
+            className="absolute inset-0 z-10"
+            style={{
+              pointerEvents: "none",
+              opacity: 0.5,
+            }}
+          >
+            {/* Calculate the range of visible coordinates in Rs units */}
+            {(() => {
+              const rs = BH_SIZE * 0.25;
+              const maxRs = Math.ceil(Math.max(size.width, size.height) / (rs * zoom) / 2);
+              const step = 0.5; // Half Rs unit steps
+              const lines = [];
+              
+              // Generate lines for both integer and semi-integer values
+              // Start from -maxRs and go to maxRs to ensure symmetry
+              for (let i = -maxRs; i <= maxRs; i += step) {
+                // Skip if not integer or semi-integer
+                if (i % 1 !== 0 && i % 1 !== 0.5) continue;
+                
+                // Convert Rs to screen coordinates
+                const screenPos = i * rs * zoom;
+                
+                // Add vertical line
+                lines.push(
+                  <div
+                    key={`v-${i}`}
+                    className="absolute top-0 bottom-0 w-px bg-white/20"
+                    style={{
+                      left: `calc(50% + ${screenPos}px)`,
+                    }}
+                  />
+                );
+                
+                // Add horizontal line
+                lines.push(
+                  <div
+                    key={`h-${i}`}
+                    className="absolute left-0 right-0 h-px bg-white/20"
+                    style={{
+                      top: `calc(50% + ${screenPos}px)`,
+                    }}
+                  />
+                );
+                
+                // Add coordinate labels for all values
+                // X-axis label
+                lines.push(
+                  <div
+                    key={`x-${i}`}
+                    className="absolute text-white/50 text-xs"
+                    style={{
+                      left: `calc(50% + ${screenPos}px)`,
+                      bottom: '0',
+                      transform: 'translateX(-50%)',
+                    }}
+                  >
+                    {i.toFixed(2)}
+                  </div>
+                );
+                
+                // Y-axis label (invert the sign for Y-axis to match coordinate system)
+                lines.push(
+                  <div
+                    key={`y-${i}`}
+                    className="absolute text-white/50 text-xs"
+                    style={{
+                      top: `calc(50% + ${screenPos}px)`,
+                      left: '0',
+                      transform: 'translateY(-50%)',
+                    }}
+                  >
+                    {(-i).toFixed(2)}
+                  </div>
+                );
+              }
+              
+              return lines;
+            })()}
+          </div>
+        )}
+
         {/* Starry background - only render when on client */}
         {isClient && (
           <svg
@@ -479,7 +715,6 @@ export default function BlackHole() {
                 }}
                 onClick={(e) => {
                   e.stopPropagation();
-                  handleLaserClick(e, laser.id);
                 }}
                 onDoubleClick={(e) => {
                   e.stopPropagation();
@@ -497,15 +732,72 @@ export default function BlackHole() {
                     pointerEvents: "auto",
                   }}
                 />
-                {/* Distance and angle label for laser source */}
-                <div
-                  className="absolute -top-6 left-1/2 transform -translate-x-1/2 text-white/80 text-xs whitespace-nowrap"
-                  style={{
-                    pointerEvents: "none",
-                  }}
-                >
-                  {calculateDistanceInRs(laser.x, laser.y, BH_SIZE).toFixed(2)} Rs | {normalizeAngle(laser.angle).toFixed(1)}°
-                </div>
+                {editingLaser?.id === laser.id && (
+                  <div
+                    className="absolute -top-32 left-1/2 transform -translate-x-1/2 bg-black/80 p-2 rounded-lg border border-white/20 z-40"
+                    style={{ pointerEvents: "auto" }}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <div className="space-y-2">
+                      <div className="text-white/60 text-xs mb-2">
+                        Use Tab to navigate between fields
+                      </div>
+                      <div className="flex items-center space-x-2">
+                        <span className="text-white/80 text-xs">X:</span>
+                        <input
+                          type="number"
+                          value={editingLaser.x}
+                          onChange={(e) => handleLaserEdit('x', e.target.value)}
+                          className="w-20 bg-white/10 text-white text-xs px-2 py-1 rounded border border-white/20"
+                          step="0.1"
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                      </div>
+                      <div className="flex items-center space-x-2">
+                        <span className="text-white/80 text-xs">Y:</span>
+                        <input
+                          type="number"
+                          value={editingLaser.y}
+                          onChange={(e) => handleLaserEdit('y', e.target.value)}
+                          className="w-20 bg-white/10 text-white text-xs px-2 py-1 rounded border border-white/20"
+                          step="0.1"
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                      </div>
+                      <div className="flex items-center space-x-2">
+                        <span className="text-white/80 text-xs">Angle:</span>
+                        <input
+                          type="number"
+                          value={editingLaser.angle}
+                          onChange={(e) => handleLaserEdit('angle', e.target.value)}
+                          className="w-20 bg-white/10 text-white text-xs px-2 py-1 rounded border border-white/20"
+                          step="0.1"
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                      </div>
+                      <div className="flex justify-end space-x-2 mt-2">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleCancelLaserEdit();
+                          }}
+                          className="text-white/80 text-xs px-2 py-1 hover:bg-white/20 rounded"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleSaveLaserEdit();
+                          }}
+                          className="text-white/80 text-xs px-2 py-1 hover:bg-white/20 rounded"
+                        >
+                          Save
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
                 {laser.fired && (
                   <div
                     className="absolute top-1/2 left-1/2"
@@ -521,32 +813,43 @@ export default function BlackHole() {
                       laser.angle,
                       size.width,
                       size.height,
-                      BH_SIZE
+                      BH_SIZE,
+                      zoom,
+                      gravityEnabled
                     ).map((point, index, array) => {
-                      const isLastPoint = index === array.length - 1;
+                      const nextPoint = array[index + 1];
                       
                       return (
                         <div key={index}>
+                          {/* Draw line to next point if it exists */}
+                          {nextPoint && (
+                            <div
+                              className="absolute bg-red-500"
+                              style={{
+                                left: `${point.x - (laser.x + size.width / 2)}px`,
+                                top: `${point.y - (laser.y + size.height / 2)}px`,
+                                width: `${Math.hypot(
+                                  nextPoint.x - point.x,
+                                  nextPoint.y - point.y
+                                )}px`,
+                                height: '1px',
+                                transformOrigin: '0 0',
+                                transform: `rotate(${Math.atan2(
+                                  nextPoint.y - point.y,
+                                  nextPoint.x - point.x
+                                )}rad)`,
+                              }}
+                            />
+                          )}
+                          {/* Draw point */}
                           <div
-                            className="absolute w-1 h-1 bg-red-500 rounded-full"
+                            className="absolute w-0.5 h-0.5 bg-red-500 rounded-full"
                             style={{
                               left: `${point.x - (laser.x + size.width / 2)}px`,
                               top: `${point.y - (laser.y + size.height / 2)}px`,
                               transform: 'translate(-50%, -50%)',
                             }}
                           />
-                          {isLastPoint && (
-                            <div
-                              className="absolute text-white/80 text-xs whitespace-nowrap"
-                              style={{
-                                left: `${point.x - (laser.x + size.width / 2) + 5}px`,
-                                top: `${point.y - (laser.y + size.height / 2) - 10}px`,
-                                transform: 'translate(-50%, -50%)',
-                              }}
-                            >
-                              {point.distToCenter.toFixed(2)} Rs
-                            </div>
-                          )}
                         </div>
                       );
                     })}
