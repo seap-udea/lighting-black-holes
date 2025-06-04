@@ -489,7 +489,7 @@ export default function BlackHole() {
         className="absolute left-0 top-0 h-full w-[20%] bg-black/50 backdrop-blur-sm border-r border-white/20 p-6 z-50"
         style={{ pointerEvents: "auto" }}
       >
-        <h1 className="text-white text-2xl font-bold mb-6">Black Hole Simulator</h1>
+        <h1 className="text-white text-2xl font-bold mb-6">Blackhole light room</h1>
         
         {/* Controls */}
         <div className="space-y-4 mb-8">
