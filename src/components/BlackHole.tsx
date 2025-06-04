@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback, useMemo } from "react";
+import dynamic from 'next/dynamic';
 
 const STAR_COUNT = 200;
 const STAR_COLOR = "#fff";
@@ -163,7 +164,7 @@ const calculateLightPath = (
     const distFromCenter = Math.hypot(xPix - centerX, yPix - centerY);
 
     // stop if we exceed maximum distance or leave the canvas
-    const factor = 2/zoom;
+    const factor = 1/zoom;
     if (distFromCenter > maxDistance || 
         xPix < -factor*width || xPix > width * factor || 
         yPix < -factor*height || yPix > height * factor) break;
@@ -199,11 +200,10 @@ const generateStars = (width: number, height: number) => {
   });
 };
 
-export default function BlackHole() {
+function BlackHoleComponent() {
   const [zoom, setZoom] = useState(1);
   const minZoom = 0.2;
   const maxZoom = 2.5;
-  const [showGrid, setShowGrid] = useState(false);
   const [gravityEnabled, setGravityEnabled] = useState(false);
   const [editingLaser, setEditingLaser] = useState<{ id: number; x: string; y: string; angle: string } | null>(null);
   const [size, setSize] = useState({ width: 800, height: 800 });
@@ -216,41 +216,31 @@ export default function BlackHole() {
   const [draggedLaserId, setDraggedLaserId] = useState<number | null>(null);
   const [rotatingLaserId, setRotatingLaserId] = useState<number | null>(null);
   const [lastMouseX, setLastMouseX] = useState<number | null>(null);
-  const [allLasersOn, setAllLasersOn] = useState(false);
 
   // Memoize BH_SIZE calculation
   const BH_SIZE = useMemo(() => Math.min(size.width, size.height, 600), [size.width, size.height]);
 
-  // Memoize star generation
-  const generateStarsMemo = useCallback((width: number, height: number) => {
-    return Array.from({ length: STAR_COUNT }, (_, i) => {
-      const seed = i * 16807 % 2147483647;
-      const x = (seed % width);
-      const y = ((seed * 16807) % 2147483647) % height;
-      const r = ((seed * 16807) % 2147483647) % STAR_SIZE + 0.2;
-      const o = ((seed * 16807) % 2147483647) % 0.7 + 0.3;
-      return { x, y, r, o };
-    });
-  }, []);
-
-  // Optimize window resize handler
-  const handleResize = useCallback(() => {
-    const newSize = { width: window.innerWidth, height: window.innerHeight };
-    setSize(newSize);
-    setStars(generateStarsMemo(newSize.width, newSize.height));
-  }, [generateStarsMemo]);
-
+  // Initialize client-side state
   useEffect(() => {
     setIsClient(true);
+    const initialSize = { width: window.innerWidth, height: window.innerHeight };
+    setSize(initialSize);
+    setStars(generateStars(initialSize.width, initialSize.height));
   }, []);
 
+  // Handle window resize
   useEffect(() => {
     if (!isClient) return;
-    
-    handleResize();
+
+    const handleResize = () => {
+      const newSize = { width: window.innerWidth, height: window.innerHeight };
+      setSize(newSize);
+      setStars(generateStars(newSize.width, newSize.height));
+    };
+
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
-  }, [isClient, handleResize]);
+  }, [isClient]);
 
   // Optimize wheel handler
   const handleWheel = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
@@ -411,73 +401,12 @@ export default function BlackHole() {
 
   const handleCleanAll = useCallback(() => {
     setLasers([]);
-    setAllLasersOn(false);
   }, []);
 
-  const handleToggleAll = useCallback(() => {
-    setAllLasersOn(!allLasersOn);
-    setLasers(prev => prev.map(laser => ({
-      ...laser,
-      fired: !allLasersOn
-    })));
-  }, [allLasersOn]);
-
-  // Memoize grid calculation
-  const gridLines = useMemo(() => {
-    if (!showGrid) return [];
-    
-    const rs = BH_SIZE * 0.25;
-    const maxRs = Math.ceil(Math.max(size.width, size.height) / (rs * zoom) / 2);
-    const step = 0.5;
-    const lines = [];
-    
-    for (let i = -maxRs; i <= maxRs; i += step) {
-      if (i % 1 !== 0 && i % 1 !== 0.5) continue;
-      
-      const screenPos = i * rs * zoom;
-      
-      lines.push(
-        <div
-          key={`v-${i}`}
-          className="absolute top-0 bottom-0 w-px bg-white/20"
-          style={{
-            left: `calc(50% + ${screenPos}px)`,
-          }}
-        />,
-        <div
-          key={`h-${i}`}
-          className="absolute left-0 right-0 h-px bg-white/20"
-          style={{
-            top: `calc(50% + ${screenPos}px)`,
-          }}
-        />,
-        <div
-          key={`x-${i}`}
-          className="absolute text-white/50 text-xs"
-          style={{
-            left: `calc(50% + ${screenPos}px)`,
-            bottom: '0',
-            transform: 'translateX(-50%)',
-          }}
-        >
-          {i.toFixed(2)}
-        </div>,
-        <div
-          key={`y-${i}`}
-          className="absolute text-white/50 text-xs"
-          style={{
-            top: `calc(50% + ${screenPos}px)`,
-            left: '0',
-            transform: 'translateY(-50%)',
-          }}
-        >
-          {(-i).toFixed(2)}
-        </div>
-      );
-    }
-    
-    return lines;
-  }, [showGrid, BH_SIZE, size.width, size.height, zoom]);
+  // Don't render anything until we're on the client
+  if (!isClient) {
+    return null;
+  }
 
   return (
     <div
@@ -486,10 +415,11 @@ export default function BlackHole() {
     >
       {/* Sidebar */}
       <div 
-        className="absolute left-0 top-0 h-full w-[20%] bg-black/50 backdrop-blur-sm border-r border-white/20 p-6 z-50"
+        className="absolute left-0 top-0 h-full w-[20%] bg-black/50 backdrop-blur-sm border-r border-white/20 p-6 z-50 flex flex-col"
         style={{ pointerEvents: "auto" }}
       >
-        <h1 className="text-white text-2xl font-bold mb-6">Blackhole light room</h1>
+        <h1 className="text-white text-2xl font-bold mb-6">Black-hole light show</h1>
+        <h2 className="text-white text-2xl font-bold mb-6">by Dr. Z</h2>
         
         {/* Controls */}
         <div className="space-y-4 mb-8">
@@ -499,28 +429,6 @@ export default function BlackHole() {
           >
             Clean All
           </button>
-          <button
-            className="w-full bg-white/10 text-white border border-white/30 rounded-lg px-4 py-2 text-sm hover:bg-white/20 transition"
-            onClick={handleToggleAll}
-          >
-            {allLasersOn ? 'Turn Off All' : 'Turn On All'}
-          </button>
-          {/* Grid Toggle Button */}
-          <div className="flex items-center justify-between">
-            <span className="text-white/80 text-sm">Show Grid</span>
-            <button
-              className={`relative w-12 h-6 rounded-full transition-colors duration-200 ${
-                showGrid ? 'bg-blue-500' : 'bg-gray-600'
-              }`}
-              onClick={() => setShowGrid(!showGrid)}
-            >
-              <div
-                className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-transform duration-200 ${
-                  showGrid ? 'left-7' : 'left-1'
-                }`}
-              />
-            </button>
-          </div>
           {/* Gravity Toggle Button */}
           <div className="flex items-center justify-between">
             <span className="text-white/80 text-sm">Gravitation</span>
@@ -544,15 +452,18 @@ export default function BlackHole() {
           <h2 className="text-lg font-semibold">How to Use</h2>
           <ul className="space-y-2 text-sm">
             <li>• Click anywhere to place a laser</li>
+            <li>• Shift + Click to place laser at 90°</li>
             <li>• Right-click and drag to rotate</li>
             <li>• Left-click and drag to move</li>
             <li>• Double-click to remove a laser</li>
+            <li>• Shift + Right-click to edit coordinates</li>
             <li>• Use mouse wheel to zoom in/out</li>
+            <li>• Toggle gravitation to see light bending</li>
           </ul>
         </div>
 
         {/* Zoom controls */}
-        <div className="flex gap-4">
+        <div className="flex gap-4 mb-8">
           <button
             className="w-full bg-white/10 text-white border border-white/30 rounded-lg px-4 py-2 text-xl hover:bg-white/20 transition"
             onClick={() => setZoom((z) => Math.max(minZoom, z - 0.2))}
@@ -565,6 +476,15 @@ export default function BlackHole() {
           >
             +
           </button>
+        </div>
+
+        {/* Dr. Z Logo */}
+        <div className="mt-auto flex justify-center">
+          <img 
+            src="/drz.png" 
+            alt="Dr. Z Logo" 
+            className="w-24 h-24 object-contain opacity-80 hover:opacity-100 transition-opacity"
+          />
         </div>
       </div>
 
@@ -590,19 +510,6 @@ export default function BlackHole() {
           />
         )}
 
-        {/* Coordinate Grid */}
-        {showGrid && (
-          <div
-            className="absolute inset-0 z-10"
-            style={{
-              pointerEvents: "none",
-              opacity: 0.5,
-            }}
-          >
-            {gridLines}
-          </div>
-        )}
-
         {/* Starry background - only render when on client */}
         {isClient && (
           <svg
@@ -611,6 +518,14 @@ export default function BlackHole() {
             height={size.height}
             style={{ display: "block" }}
           >
+            {/* Grid lines */}
+            <defs>
+              <pattern id="grid" width="100" height="100" patternUnits="userSpaceOnUse">
+                <path d="M 100 0 L 0 0 0 100" fill="none" stroke="rgba(255,255,255,0.2)" strokeWidth="0.5"/>
+              </pattern>
+            </defs>
+            <rect width="100%" height="100%" fill="url(#grid)" />
+            
             {stars.map((star, i) => (
               <circle
                 key={i}
@@ -638,10 +553,10 @@ export default function BlackHole() {
               cy={BH_SIZE / 2}
               r={BH_SIZE * 0.25}
               fill="none"
-              stroke="#aaa"
-              strokeWidth={BH_SIZE * 0.004}
+              stroke="#fff"
+              strokeWidth={BH_SIZE * 0.006}
               strokeDasharray={`${BH_SIZE * 0.01} ${BH_SIZE * 0.01}`}
-              opacity={0.7}
+              opacity={0.9}
             />
           </svg>
         </div>
@@ -692,7 +607,7 @@ export default function BlackHole() {
                 }}
               >
                 <div
-                  className="w-6 h-3 bg-red-500"
+                  className="w-6 h-3 bg-cyan-500"
                   style={{
                     transform: `rotate(${laser.angle}deg)`,
                     pointerEvents: "auto",
@@ -853,4 +768,9 @@ export default function BlackHole() {
       </div>
     </div>
   );
-} 
+}
+
+// Export a dynamically loaded version of the component with SSR disabled
+export default dynamic(() => Promise.resolve(BlackHoleComponent), {
+  ssr: false
+}); 
