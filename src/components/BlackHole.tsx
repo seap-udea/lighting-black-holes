@@ -418,8 +418,7 @@ function BlackHoleComponent() {
         className="absolute left-0 top-0 h-full w-[20%] bg-black/50 backdrop-blur-sm border-r border-white/20 p-6 z-50 flex flex-col"
         style={{ pointerEvents: "auto" }}
       >
-        <h1 className="text-white text-2xl font-bold mb-6">Black-hole light show</h1>
-        <h2 className="text-white text-2xl font-bold mb-6">by Dr. Z</h2>
+        <h1 className="text-white text-2xl font-bold mb-6">Black-hole light show<br/><i>by Dr. Z</i></h1>
         
         {/* Controls */}
         <div className="space-y-4 mb-8">
@@ -485,6 +484,9 @@ function BlackHoleComponent() {
             alt="Dr. Z Logo" 
             className="w-24 h-24 object-contain opacity-80 hover:opacity-100 transition-opacity"
           />
+        </div>
+        <div className="flex justify-center text-white/30 text-sm">
+          <center><i>Developed by Jorge I. Zuluaga in Cursor with the assistance of ChatGPT 4.5</i></center>
         </div>
       </div>
 
