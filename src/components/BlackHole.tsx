@@ -486,7 +486,7 @@ function BlackHoleComponent() {
           />
         </div>
         <div className="flex justify-center text-white/30 text-sm">
-          <center><i>Developed by Jorge I. Zuluaga in Cursor with the assistance of ChatGPT 4.5</i></center>
+          <center><i>Developed by <a href="https://drz.academy" target="_blank" rel="noopener noreferrer" className="text-white/80 hover:text-white">Jorge I. Zuluaga (Dr. Z)</a> in Cursor with the assistance of ChatGPT 4.5</i></center>
         </div>
       </div>
 
@@ -523,7 +523,7 @@ function BlackHoleComponent() {
             {/* Grid lines */}
             <defs>
               <pattern id="grid" width="100" height="100" patternUnits="userSpaceOnUse">
-                <path d="M 100 0 L 0 0 0 100" fill="none" stroke="rgba(255,255,255,0.2)" strokeWidth="0.5"/>
+                <path d="M 100 0 L 0 0 0 100" fill="none" stroke="rgba(255,255,255,0.2)" strokeWidth="1.5"/>
               </pattern>
             </defs>
             <rect width="100%" height="100%" fill="url(#grid)" />
