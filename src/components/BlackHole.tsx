@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import dynamic from 'next/dynamic';
+import packageJson from '../../package.json';
 
 const STAR_COUNT = 200;
 const STAR_COLOR = "#fff";
@@ -218,6 +219,71 @@ function BlackHoleComponent() {
   const [draggedLaserId, setDraggedLaserId] = useState<number | null>(null);
   const [rotatingLaserId, setRotatingLaserId] = useState<number | null>(null);
   const [lastMouseX, setLastMouseX] = useState<number | null>(null);
+  const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState(false);
+  const [panStart, setPanStart] = useState({ x: 0, y: 0 });
+  const [wasPanning, setWasPanning] = useState(false);
+  const [language, setLanguage] = useState<'en' | 'es'>('es');
+
+  // Translations
+  const translations = useMemo(() => ({
+    en: {
+      title: "Black-hole optics",
+      subtitle: "by Dr. Z",
+      cleanAll: "Clean All",
+      gravitation: "Gravitation",
+      showGrid: "Show Grid",
+      howToUse: "How to Use",
+      instructions: [
+        "• Click anywhere to place a laser",
+        "• Shift + Click to place laser at 90°",
+        "• Right-click and drag to rotate",
+        "• Left-click and drag to move",
+        "• Double-click to remove a laser",
+        "• Shift + Right-click to edit coordinates",
+        "• Use mouse wheel to zoom in/out",
+        "• Alt + drag or middle-click drag to pan",
+        "• Toggle gravitation to see light bending"
+      ],
+      zoomIn: "+",
+      zoomOut: "-",
+      credits: "Developed by Jorge I. Zuluaga (Dr. Z) in Cursor with the assistance of ChatGPT 4.5",
+      version: "Version",
+      latestCommit: "Latest commit:",
+      laserNumber: "Laser #",
+      coordinates: "Coordinates (in Rs units)",
+      close: "×"
+    },
+    es: {
+      title: "Óptica de agujeros negros",
+      subtitle: "por Dr. Z",
+      cleanAll: "Limpiar Todo",
+      gravitation: "Gravitación",
+      showGrid: "Mostrar Cuadrícula",
+      howToUse: "Cómo Usar",
+      instructions: [
+        "• Haz clic en cualquier lugar para colocar un láser",
+        "• Shift + Clic para colocar láser a 90°",
+        "• Clic derecho y arrastra para rotar",
+        "• Clic izquierdo y arrastra para mover",
+        "• Doble clic para eliminar un láser",
+        "• Shift + Clic derecho para editar coordenadas",
+        "• Usa la rueda del ratón para zoom",
+        "• Alt + arrastra o clic central para desplazar",
+        "• Activa gravitación para ver curvatura de luz"
+      ],
+      zoomIn: "+",
+      zoomOut: "-",
+      credits: "Desarrollado por Jorge I. Zuluaga (Dr. Z) en Cursor con la asistencia de ChatGPT 4.5",
+      version: "Versión",
+      latestCommit: "Última confirmación:",
+      laserNumber: "Láser #",
+      coordinates: "Coordenadas (en unidades Rs)",
+      close: "×"
+    }
+  }), []);
+
+  const t = translations[language];
 
   // Memoize BH_SIZE calculation
   const BH_SIZE = useMemo(() => Math.min(size.width, size.height, 600), [size.width, size.height]);
@@ -268,13 +334,19 @@ function BlackHoleComponent() {
 
   // Optimize canvas click handler
   const handleCanvasClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    if (isDragging) return;
+    // Reset wasPanning flag first, then check if we should skip this click
+    if (wasPanning) {
+      setWasPanning(false);
+      return; // Skip this click if we were just panning
+    }
+    
+    if (isDragging || isPanning) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
     
-    const relativeX = (x - BH_CENTER.x) / zoom;
-    const relativeY = (y - BH_CENTER.y) / zoom;
+    const relativeX = (x - BH_CENTER.x - panOffset.x) / zoom;
+    const relativeY = (y - BH_CENTER.y - panOffset.y) / zoom;
     
     const distanceFromCenter = Math.hypot(relativeX, relativeY);
     const blackHoleRadius = rs / zoom;
@@ -291,7 +363,7 @@ function BlackHoleComponent() {
       setLasers((prev) => [...prev, newLaser]);
       setNextId((prev) => prev + 1);
     }
-  }, [isDragging, zoom, BH_SIZE, nextId, BH_CENTER, rs]);
+  }, [isDragging, isPanning, wasPanning, zoom, BH_SIZE, nextId, BH_CENTER, rs, panOffset]);
 
   // Optimize laser handlers
   const handleLaserDoubleClick = useCallback((id: number) => {
@@ -394,10 +466,8 @@ function BlackHoleComponent() {
       const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
       
-      const centerX = rect.width / 2;
-      const centerY = rect.height / 2;
-      const relativeX = (x - centerX) / zoom;
-      const relativeY = (y - centerY) / zoom;
+      const relativeX = (x - BH_CENTER.x - panOffset.x) / zoom;
+      const relativeY = (y - BH_CENTER.y - panOffset.y) / zoom;
       
       setLasers((prev) =>
         prev.map((laser) =>
@@ -405,18 +475,43 @@ function BlackHoleComponent() {
         )
       );
     }
-  }, [rotatingLaserId, lastMouseX, isDragging, draggedLaserId, zoom]);
+    else if (isPanning) {
+      const deltaX = e.clientX - panStart.x;
+      const deltaY = e.clientY - panStart.y;
+      setPanOffset({ x: deltaX, y: deltaY });
+    }
+  }, [rotatingLaserId, lastMouseX, isDragging, draggedLaserId, zoom, isPanning, panStart, BH_CENTER, panOffset]);
+
+  const handleMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.button === 1 || (e.button === 0 && e.altKey)) { // Middle mouse or Alt+Left click for panning
+      e.preventDefault();
+      setIsPanning(true);
+      setPanStart({ x: e.clientX - panOffset.x, y: e.clientY - panOffset.y });
+    }
+  }, [panOffset]);
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
     if (e.button === 0) {
       setIsDragging(false);
       setDraggedLaserId(null);
+      // Stop panning if left mouse button is released (for Alt+drag panning)
+      if (isPanning) {
+        setIsPanning(false);
+        setWasPanning(true); // Mark that we were just panning
+      }
     }
     else if (e.button === 2) {
       setRotatingLaserId(null);
       setLastMouseX(null);
     }
-  }, []);
+    else if (e.button === 1) {
+      // Stop panning if middle mouse button is released
+      if (isPanning) {
+        setIsPanning(false);
+        setWasPanning(true); // Mark that we were just panning
+      }
+    }
+  }, [isPanning]);
 
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -441,7 +536,7 @@ function BlackHoleComponent() {
         className="absolute left-0 top-0 h-full w-[20%] bg-black/50 backdrop-blur-sm border-r border-white/20 p-6 z-50 flex flex-col"
         style={{ pointerEvents: "auto" }}
       >
-        <h1 className="text-white text-2xl font-bold mb-6">Black-hole light show<br/><i>by Dr. Z</i></h1>
+        <h1 className="text-white text-2xl font-bold mb-6">{t.title}<br/><i>{t.subtitle}</i></h1>
         
         {/* Controls */}
         <div className="space-y-4 mb-8">
@@ -449,11 +544,11 @@ function BlackHoleComponent() {
             className="w-full bg-white/10 text-white border border-white/30 rounded-lg px-4 py-2 text-sm hover:bg-white/20 transition"
             onClick={handleCleanAll}
           >
-            Clean All
+            {t.cleanAll}
           </button>
           {/* Gravity Toggle Button */}
           <div className="flex items-center justify-between">
-            <span className="text-white/80 text-sm">Gravitation</span>
+            <span className="text-white/80 text-sm">{t.gravitation}</span>
             <button
               className={`relative w-12 h-6 rounded-full transition-colors duration-200 ${
                 gravityEnabled ? 'bg-blue-500' : 'bg-gray-600'
@@ -469,7 +564,7 @@ function BlackHoleComponent() {
           </div>
           {/* Grid Toggle Button */}
           <div className="flex items-center justify-between">
-            <span className="text-white/80 text-sm">Show Grid</span>
+            <span className="text-white/80 text-sm">{t.showGrid}</span>
             <button
               className={`relative w-12 h-6 rounded-full transition-colors duration-200 ${
                 showGrid ? 'bg-green-500' : 'bg-gray-600'
@@ -487,16 +582,29 @@ function BlackHoleComponent() {
 
         {/* Instructions */}
         <div className="text-white/80 space-y-4 mb-8">
-          <h2 className="text-lg font-semibold">How to Use</h2>
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold">{t.howToUse}</h2>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setLanguage('en')}
+                className={`text-lg hover:scale-110 transition-transform ${language === 'en' ? 'opacity-100' : 'opacity-60 hover:opacity-80'}`}
+                title="English"
+              >
+                🇯🇲
+              </button>
+              <button
+                onClick={() => setLanguage('es')}
+                className={`text-lg hover:scale-110 transition-transform ${language === 'es' ? 'opacity-100' : 'opacity-60 hover:opacity-80'}`}
+                title="Español"
+              >
+                🇨🇴
+              </button>
+            </div>
+          </div>
           <ul className="space-y-2 text-sm">
-            <li>• Click anywhere to place a laser</li>
-            <li>• Shift + Click to place laser at 90°</li>
-            <li>• Right-click and drag to rotate</li>
-            <li>• Left-click and drag to move</li>
-            <li>• Double-click to remove a laser</li>
-            <li>• Shift + Right-click to edit coordinates</li>
-            <li>• Use mouse wheel to zoom in/out</li>
-            <li>• Toggle gravitation to see light bending</li>
+            {t.instructions.map((instruction, index) => (
+              <li key={index}>{instruction}</li>
+            ))}
           </ul>
         </div>
 
@@ -506,13 +614,13 @@ function BlackHoleComponent() {
             className="w-full bg-white/10 text-white border border-white/30 rounded-lg px-4 py-2 text-xl hover:bg-white/20 transition"
             onClick={() => setZoom((z) => Math.max(minZoom, z - 0.2))}
           >
-            -
+            {t.zoomOut}
           </button>
           <button
             className="w-full bg-white/10 text-white border border-white/30 rounded-lg px-4 py-2 text-xl hover:bg-white/20 transition"
             onClick={() => setZoom((z) => Math.min(maxZoom, z + 0.2))}
           >
-            +
+            {t.zoomIn}
           </button>
         </div>
 
@@ -524,15 +632,15 @@ function BlackHoleComponent() {
             className="w-24 h-24 object-contain opacity-80 hover:opacity-100 transition-opacity"
           />
         </div>
-        <div className="flex justify-center text-white/30 text-sm">
-          <center><i>Developed by <a href="https://drz.academy" target="_blank" rel="noopener noreferrer" className="text-white/80 hover:text-white">Jorge I. Zuluaga (Dr. Z)</a> in Cursor with the assistance of ChatGPT 4.5</i></center>
+        <div className="flex justify-center text-white/30" style={{ fontSize: '10px' }}>
+          <center><i>{language === 'en' ? 'Developed by' : 'Desarrollado por'} <a href="https://drz.academy" target="_blank" rel="noopener noreferrer" className="text-white/80 hover:text-white">Jorge I. Zuluaga (Dr. Z)</a> {language === 'en' ? 'with the assistance of AI and the suggestions and tests of relativity students (thanks!)' : 'con la asistencia de IA y las sugerencias y pruebas de estudiantes de relatividad (¡gracias!)'}</i></center>
         </div>
         
         {/* Version and Commit Info */}
         <div className="mt-4 pt-4 border-t border-white/10">
           <div className="text-center text-white/50 text-xs space-y-1">
-            <div className="font-mono">Version 1.2.0</div>
-            <div className="font-mono">Latest commit: {new Date().toLocaleDateString('en-US', { 
+            <div className="font-mono">{t.version} {packageJson.version}</div>
+            <div className="font-mono">{t.latestCommit} {new Date().toLocaleDateString(language === 'en' ? 'en-US' : 'es-ES', { 
               year: 'numeric', 
               month: 'short', 
               day: 'numeric' 
@@ -546,10 +654,14 @@ function BlackHoleComponent() {
         className="absolute left-[20%] top-0 w-[80%] h-full"
         onWheel={handleWheel}
         onClick={handleCanvasClick}
+        onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onContextMenu={handleContextMenu}
         tabIndex={0}
+        style={{
+          cursor: isPanning ? 'grabbing' : (panOffset.x !== 0 || panOffset.y !== 0 ? 'grab' : 'default')
+        }}
       >
 
 
@@ -565,7 +677,7 @@ function BlackHoleComponent() {
             {showGrid && (
               <>
                 <defs>
-                  <pattern id="grid" width={gridSpacing} height={gridSpacing} patternUnits="userSpaceOnUse" x={BH_CENTER.x % gridSpacing} y={BH_CENTER.y % gridSpacing}>
+                  <pattern id="grid" width={gridSpacing} height={gridSpacing} patternUnits="userSpaceOnUse" x={(BH_CENTER.x + panOffset.x) % gridSpacing} y={(BH_CENTER.y + panOffset.y) % gridSpacing}>
                     <path d={`M ${gridSpacing} 0 L 0 0 0 ${gridSpacing}`} fill="none" stroke="rgba(255,255,255,0.2)" strokeWidth="1.5"/>
                   </pattern>
                 </defs>
@@ -582,7 +694,7 @@ function BlackHoleComponent() {
                     const pixelDistance = i * rs * zoom;
                     
                     // X-axis labels at the bottom
-                    const xPos = BH_CENTER.x + pixelDistance;
+                    const xPos = BH_CENTER.x + panOffset.x + pixelDistance;
                     if (xPos >= 0 && xPos <= playgroundWidth) {
                       labels.push(
                         <text
@@ -593,6 +705,7 @@ function BlackHoleComponent() {
                           fontSize="10"
                           textAnchor="middle"
                           fontFamily="monospace"
+                          style={{ userSelect: "none", pointerEvents: "none" }}
                         >
                           {i.toFixed(1)}
                         </text>
@@ -600,7 +713,7 @@ function BlackHoleComponent() {
                     }
                     
                     // Y-axis labels at the left border (negative because Y increases downward)
-                    const yPos = BH_CENTER.y + pixelDistance;
+                    const yPos = BH_CENTER.y + panOffset.y + pixelDistance;
                     if (yPos >= 0 && yPos <= playgroundHeight) {
                       labels.push(
                         <text
@@ -611,6 +724,7 @@ function BlackHoleComponent() {
                           fontSize="10"
                           textAnchor="start"
                           fontFamily="monospace"
+                          style={{ userSelect: "none", pointerEvents: "none" }}
                         >
                           {(-i).toFixed(1)}
                         </text>
@@ -640,8 +754,8 @@ function BlackHoleComponent() {
         <div
           className="absolute left-1/2 top-1/2 z-10"
           style={{
-            transform: `translate(-50%, -50%) scale(${zoom})`,
-            transition: "transform 0.2s cubic-bezier(.4,2,.6,1)",
+            transform: `translate(calc(-50% + ${panOffset.x}px), calc(-50% + ${panOffset.y}px)) scale(${zoom})`,
+            transition: isPanning ? "none" : "transform 0.2s cubic-bezier(.4,2,.6,1)",
           }}
         >
           <svg width={BH_SIZE} height={BH_SIZE}>
@@ -662,8 +776,8 @@ function BlackHoleComponent() {
         <div
           className="absolute left-1/2 top-1/2 z-20"
           style={{
-            transform: `translate(-50%, -50%) scale(${zoom})`,
-            transition: "transform 0.2s cubic-bezier(.4,2,.6,1)",
+            transform: `translate(calc(-50% + ${panOffset.x}px), calc(-50% + ${panOffset.y}px)) scale(${zoom})`,
+            transition: isPanning ? "none" : "transform 0.2s cubic-bezier(.4,2,.6,1)",
             pointerEvents: "auto",
           }}
         >
@@ -806,18 +920,18 @@ function BlackHoleComponent() {
                 <div className="space-y-3">
                   <div className="flex items-center justify-between mb-2">
                     <div className="text-white/80 text-sm font-medium">
-                      Laser #{laser.id}
+                      {t.laserNumber}{laser.id}
                     </div>
                     <button
                       onClick={handleCloseLaserEdit}
                       className="text-white/60 hover:text-white/90 text-lg leading-none"
-                      title="Close"
+                      title={language === 'en' ? 'Close' : 'Cerrar'}
                     >
-                      ×
+                      {t.close}
                     </button>
                   </div>
                   <div className="text-white/60 text-xs mb-2">
-                    Coordinates (in Rs units)
+                    {t.coordinates}
                   </div>
                   <div className="flex items-center space-x-2">
                     <span className="text-white/80 text-sm w-12">X:</span>
@@ -861,8 +975,8 @@ function BlackHoleComponent() {
         <div
           className="absolute left-1/2 top-1/2 z-30"
           style={{
-            transform: `translate(-50%, -50%) scale(${zoom})`,
-            transition: "transform 0.2s cubic-bezier(.4,2,.6,1)",
+            transform: `translate(calc(-50% + ${panOffset.x}px), calc(-50% + ${panOffset.y}px)) scale(${zoom})`,
+            transition: isPanning ? "none" : "transform 0.2s cubic-bezier(.4,2,.6,1)",
             pointerEvents: "none",
           }}
         >
