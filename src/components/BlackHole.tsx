@@ -205,7 +205,9 @@ function BlackHoleComponent() {
   const minZoom = 0.2;
   const maxZoom = 2.5;
   const [gravityEnabled, setGravityEnabled] = useState(false);
-  const [editingLaser, setEditingLaser] = useState<{ id: number; x: string; y: string; angle: string } | null>(null);
+  const [showGrid, setShowGrid] = useState(false);
+  const [editingLaserId, setEditingLaserId] = useState<number | null>(null);
+  const [tempInputValues, setTempInputValues] = useState<{ x: string; y: string; angle: string }>({ x: '', y: '', angle: '' });
   const [size, setSize] = useState({ width: 800, height: 800 });
   const [stars, setStars] = useState<Array<{ x: number; y: number; r: number; o: number }>>([]);
   const [isClient, setIsClient] = useState(false);
@@ -219,6 +221,17 @@ function BlackHoleComponent() {
 
   // Memoize BH_SIZE calculation
   const BH_SIZE = useMemo(() => Math.min(size.width, size.height, 600), [size.width, size.height]);
+  const rs = useMemo(() => BH_SIZE * 0.25, [BH_SIZE]); // Schwarzschild radius in pixels
+
+  const playgroundWidth = useMemo(() => size.width * 0.8, [size.width]);
+  const playgroundHeight = useMemo(() => size.height, [size.height]);
+  
+  const BH_CENTER = useMemo(() => ({
+    x: playgroundWidth / 2,
+    y: playgroundHeight / 2,
+  }), [playgroundWidth, playgroundHeight]);
+  
+  const gridSpacing = useMemo(() => 0.5 * rs * zoom, [rs, zoom]);
 
   // Initialize client-side state
   useEffect(() => {
@@ -260,13 +273,11 @@ function BlackHoleComponent() {
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
     
-    const centerX = rect.width / 2;
-    const centerY = rect.height / 2;
-    const relativeX = (x - centerX) / zoom;
-    const relativeY = (y - centerY) / zoom;
+    const relativeX = (x - BH_CENTER.x) / zoom;
+    const relativeY = (y - BH_CENTER.y) / zoom;
     
     const distanceFromCenter = Math.hypot(relativeX, relativeY);
-    const blackHoleRadius = (BH_SIZE * 0.25) / zoom;
+    const blackHoleRadius = rs / zoom;
     
     if (distanceFromCenter > blackHoleRadius) {
       const newLaser: Laser = {
@@ -280,7 +291,7 @@ function BlackHoleComponent() {
       setLasers((prev) => [...prev, newLaser]);
       setNextId((prev) => prev + 1);
     }
-  }, [isDragging, zoom, BH_SIZE, nextId]);
+  }, [isDragging, zoom, BH_SIZE, nextId, BH_CENTER, rs]);
 
   // Optimize laser handlers
   const handleLaserDoubleClick = useCallback((id: number) => {
@@ -304,14 +315,22 @@ function BlackHoleComponent() {
       if (e.shiftKey) {
         const laser = lasers.find(l => l.id === id);
         if (laser) {
-          const xInRs = (laser.x * zoom) / (BH_SIZE * 0.25);
-          const yInRs = (laser.y * zoom) / (BH_SIZE * 0.25);
-          setEditingLaser({
-            id,
+          const rs = BH_SIZE * 0.25;
+          const xInRs = laser.x / rs;
+          const yInRs = -laser.y / rs;
+          // Convert from screen coordinates to physics coordinates
+          // Screen: 0°=right, 90°=down, 180°=left, 270°=up
+          // Physics: 0°=right, 90°=up, 180°=left, -90°=down
+          let displayAngle = -laser.angle;
+          // Normalize to [-180, 180] range
+          while (displayAngle > 180) displayAngle -= 360;
+          while (displayAngle <= -180) displayAngle += 360;
+          setTempInputValues({
             x: xInRs.toFixed(2),
             y: yInRs.toFixed(2),
-            angle: laser.angle.toFixed(2)
+            angle: displayAngle.toFixed(1)
           });
+          setEditingLaserId(id);
         }
       } else {
         setRotatingLaserId(id);
@@ -321,37 +340,41 @@ function BlackHoleComponent() {
   }, [lasers, zoom, BH_SIZE]);
 
   const handleLaserEdit = useCallback((field: 'x' | 'y' | 'angle', value: string) => {
-    if (editingLaser) {
-      setEditingLaser({
-        ...editingLaser,
+    if (editingLaserId !== null) {
+      // Update temporary input value immediately
+      setTempInputValues(prev => ({
+        ...prev,
         [field]: value
-      });
-    }
-  }, [editingLaser]);
-
-  const handleSaveLaserEdit = useCallback(() => {
-    if (editingLaser) {
-      const xInPixels = (parseFloat(editingLaser.x) * BH_SIZE * 0.25) / zoom;
-      const yInPixels = (parseFloat(editingLaser.y) * BH_SIZE * 0.25) / zoom;
+      }));
       
-      setLasers(prev =>
-        prev.map(laser =>
-          laser.id === editingLaser.id
-            ? {
-                ...laser,
-                x: xInPixels,
-                y: yInPixels,
-                angle: parseFloat(editingLaser.angle)
-              }
-            : laser
-        )
-      );
-      setEditingLaser(null);
+      // Only update laser if value is a valid number
+      const numValue = parseFloat(value);
+      if (!isNaN(numValue)) {
+        const rs = BH_SIZE * 0.25;
+        
+        setLasers(prev =>
+          prev.map(laser =>
+            laser.id === editingLaserId
+              ? {
+                  ...laser,
+                  ...(field === 'x' ? { x: numValue * rs } : {}),
+                  ...(field === 'y' ? { y: -numValue * rs } : {}), // Negate Y to convert back to screen coordinates
+                  ...(field === 'angle' ? { 
+                    // Convert from physics coordinates back to screen coordinates
+                    // Physics: 0°=right, 90°=up, 180°=left, -90°=down
+                    // Screen: 0°=right, 90°=down, 180°=left, 270°=up
+                    angle: ((-numValue % 360) + 360) % 360
+                  } : {})
+                }
+              : laser
+          )
+        );
+      }
     }
-  }, [editingLaser, BH_SIZE, zoom]);
+  }, [editingLaserId, BH_SIZE]);
 
-  const handleCancelLaserEdit = useCallback(() => {
-    setEditingLaser(null);
+  const handleCloseLaserEdit = useCallback(() => {
+    setEditingLaserId(null);
   }, []);
 
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
@@ -444,6 +467,22 @@ function BlackHoleComponent() {
               />
             </button>
           </div>
+          {/* Grid Toggle Button */}
+          <div className="flex items-center justify-between">
+            <span className="text-white/80 text-sm">Show Grid</span>
+            <button
+              className={`relative w-12 h-6 rounded-full transition-colors duration-200 ${
+                showGrid ? 'bg-green-500' : 'bg-gray-600'
+              }`}
+              onClick={() => setShowGrid(!showGrid)}
+            >
+              <div
+                className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-transform duration-200 ${
+                  showGrid ? 'left-7' : 'left-1'
+                }`}
+              />
+            </button>
+          </div>
         </div>
 
         {/* Instructions */}
@@ -488,6 +527,18 @@ function BlackHoleComponent() {
         <div className="flex justify-center text-white/30 text-sm">
           <center><i>Developed by <a href="https://drz.academy" target="_blank" rel="noopener noreferrer" className="text-white/80 hover:text-white">Jorge I. Zuluaga (Dr. Z)</a> in Cursor with the assistance of ChatGPT 4.5</i></center>
         </div>
+        
+        {/* Version and Commit Info */}
+        <div className="mt-4 pt-4 border-t border-white/10">
+          <div className="text-center text-white/50 text-xs space-y-1">
+            <div className="font-mono">Version 1.2.0</div>
+            <div className="font-mono">Latest commit: {new Date().toLocaleDateString('en-US', { 
+              year: 'numeric', 
+              month: 'short', 
+              day: 'numeric' 
+            })}</div>
+          </div>
+        </div>
       </div>
 
       {/* Playground area */}
@@ -500,17 +551,7 @@ function BlackHoleComponent() {
         onContextMenu={handleContextMenu}
         tabIndex={0}
       >
-        {/* Background overlay when editing */}
-        {editingLaser && (
-          <div
-            className="absolute inset-0 z-30"
-            style={{ pointerEvents: "auto" }}
-            onClick={(e) => {
-              e.stopPropagation();
-              handleCancelLaserEdit();
-            }}
-          />
-        )}
+
 
         {/* Starry background - only render when on client */}
         {isClient && (
@@ -521,12 +562,66 @@ function BlackHoleComponent() {
             style={{ display: "block" }}
           >
             {/* Grid lines */}
-            <defs>
-              <pattern id="grid" width="100" height="100" patternUnits="userSpaceOnUse">
-                <path d="M 100 0 L 0 0 0 100" fill="none" stroke="rgba(255,255,255,0.2)" strokeWidth="1.5"/>
-              </pattern>
-            </defs>
-            <rect width="100%" height="100%" fill="url(#grid)" />
+            {showGrid && (
+              <>
+                <defs>
+                  <pattern id="grid" width={gridSpacing} height={gridSpacing} patternUnits="userSpaceOnUse" x={BH_CENTER.x % gridSpacing} y={BH_CENTER.y % gridSpacing}>
+                    <path d={`M ${gridSpacing} 0 L 0 0 0 ${gridSpacing}`} fill="none" stroke="rgba(255,255,255,0.2)" strokeWidth="1.5"/>
+                  </pattern>
+                </defs>
+                <rect width="100%" height="100%" fill="url(#grid)" />
+                
+                {/* Grid tick labels */}
+                {(() => {
+                  const labels = [];
+                  const maxDistance = Math.max(playgroundWidth, playgroundHeight) / 2;
+                  const step = 0.5; // Step in Rs units
+                  const maxRs = Math.ceil(maxDistance / (rs * zoom));
+                  
+                  for (let i = -maxRs; i <= maxRs; i += step) {
+                    const pixelDistance = i * rs * zoom;
+                    
+                    // X-axis labels at the bottom
+                    const xPos = BH_CENTER.x + pixelDistance;
+                    if (xPos >= 0 && xPos <= playgroundWidth) {
+                      labels.push(
+                        <text
+                          key={`x-${i}`}
+                          x={xPos}
+                          y={playgroundHeight - 10}
+                          fill="rgba(255,255,255,0.7)"
+                          fontSize="10"
+                          textAnchor="middle"
+                          fontFamily="monospace"
+                        >
+                          {i.toFixed(1)}
+                        </text>
+                      );
+                    }
+                    
+                    // Y-axis labels at the left border (negative because Y increases downward)
+                    const yPos = BH_CENTER.y + pixelDistance;
+                    if (yPos >= 0 && yPos <= playgroundHeight) {
+                      labels.push(
+                        <text
+                          key={`y-${i}`}
+                          x={10}
+                          y={yPos + 4}
+                          fill="rgba(255,255,255,0.7)"
+                          fontSize="10"
+                          textAnchor="start"
+                          fontFamily="monospace"
+                        >
+                          {(-i).toFixed(1)}
+                        </text>
+                      );
+                    }
+                  }
+                  
+                  return labels;
+                })()}
+              </>
+            )}
             
             {stars.map((star, i) => (
               <circle
@@ -615,71 +710,17 @@ function BlackHoleComponent() {
                     pointerEvents: "auto",
                   }}
                 />
-                {editingLaser?.id === laser.id && (
-                  <div
-                    className="absolute -top-32 left-1/2 transform -translate-x-1/2 bg-black/80 p-2 rounded-lg border border-white/20 z-40"
-                    style={{ pointerEvents: "auto" }}
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <div className="space-y-2">
-                      <div className="text-white/60 text-xs mb-2">
-                        Use Tab to navigate between fields
-                      </div>
-                      <div className="flex items-center space-x-2">
-                        <span className="text-white/80 text-xs">X:</span>
-                        <input
-                          type="number"
-                          value={editingLaser.x}
-                          onChange={(e) => handleLaserEdit('x', e.target.value)}
-                          className="w-20 bg-white/10 text-white text-xs px-2 py-1 rounded border border-white/20"
-                          step="0.1"
-                          onClick={(e) => e.stopPropagation()}
-                        />
-                      </div>
-                      <div className="flex items-center space-x-2">
-                        <span className="text-white/80 text-xs">Y:</span>
-                        <input
-                          type="number"
-                          value={editingLaser.y}
-                          onChange={(e) => handleLaserEdit('y', e.target.value)}
-                          className="w-20 bg-white/10 text-white text-xs px-2 py-1 rounded border border-white/20"
-                          step="0.1"
-                          onClick={(e) => e.stopPropagation()}
-                        />
-                      </div>
-                      <div className="flex items-center space-x-2">
-                        <span className="text-white/80 text-xs">Angle:</span>
-                        <input
-                          type="number"
-                          value={editingLaser.angle}
-                          onChange={(e) => handleLaserEdit('angle', e.target.value)}
-                          className="w-20 bg-white/10 text-white text-xs px-2 py-1 rounded border border-white/20"
-                          step="0.1"
-                          onClick={(e) => e.stopPropagation()}
-                        />
-                      </div>
-                      <div className="flex justify-end space-x-2 mt-2">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleCancelLaserEdit();
-                          }}
-                          className="text-white/80 text-xs px-2 py-1 hover:bg-white/20 rounded"
-                        >
-                          Cancel
-                        </button>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleSaveLaserEdit();
-                          }}
-                          className="text-white/80 text-xs px-2 py-1 hover:bg-white/20 rounded"
-                        >
-                          Save
-                        </button>
-                      </div>
-                    </div>
-                  </div>
+                {/* Highlight marks for laser being edited */}
+                {editingLaserId === laser.id && (
+                  <>
+                    {/* Corner marks */}
+                    <div className="absolute -top-3 -left-3 w-2 h-2 border-t-2 border-l-2 border-yellow-400"></div>
+                    <div className="absolute -top-3 -right-3 w-2 h-2 border-t-2 border-r-2 border-yellow-400"></div>
+                    <div className="absolute -bottom-3 -left-3 w-2 h-2 border-b-2 border-l-2 border-yellow-400"></div>
+                    <div className="absolute -bottom-3 -right-3 w-2 h-2 border-b-2 border-r-2 border-yellow-400"></div>
+                    {/* Pulsing outline */}
+                    <div className="absolute -inset-2 border border-yellow-400 rounded animate-pulse"></div>
+                  </>
                 )}
                 {laser.fired && (
                   <div
@@ -742,6 +783,79 @@ function BlackHoleComponent() {
             );
           })}
         </div>
+
+        {/* Edit dialog - fixed at top-right corner */}
+        {editingLaserId !== null && (() => {
+          const laser = lasers.find(l => l.id === editingLaserId);
+          if (!laser) return null;
+          
+          const rs = BH_SIZE * 0.25;
+          const xInRs = laser.x / rs;
+          const yInRs = -laser.y / rs; // Negate Y to match physics convention (positive up)
+          
+          return (
+            <div
+              className="absolute top-4 right-4 z-50"
+              style={{
+                pointerEvents: "auto"
+              }}
+              onClick={(e) => e.stopPropagation()}
+              onMouseDown={(e) => e.stopPropagation()}
+            >
+              <div className="bg-black/90 p-4 rounded-lg border border-white/20 backdrop-blur-sm min-w-[200px]">
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="text-white/80 text-sm font-medium">
+                      Laser #{laser.id}
+                    </div>
+                    <button
+                      onClick={handleCloseLaserEdit}
+                      className="text-white/60 hover:text-white/90 text-lg leading-none"
+                      title="Close"
+                    >
+                      ×
+                    </button>
+                  </div>
+                  <div className="text-white/60 text-xs mb-2">
+                    Coordinates (in Rs units)
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <span className="text-white/80 text-sm w-12">X:</span>
+                    <input
+                      type="number"
+                      value={tempInputValues.x}
+                      onChange={(e) => handleLaserEdit('x', e.target.value)}
+                      className="w-24 bg-white/10 text-white text-sm px-3 py-1 rounded border border-white/20 focus:border-blue-400 focus:outline-none"
+                      step="0.1"
+                      autoFocus
+                    />
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <span className="text-white/80 text-sm w-12">Y:</span>
+                    <input
+                      type="number"
+                      value={tempInputValues.y}
+                      onChange={(e) => handleLaserEdit('y', e.target.value)}
+                      className="w-24 bg-white/10 text-white text-sm px-3 py-1 rounded border border-white/20 focus:border-blue-400 focus:outline-none"
+                      step="0.1"
+                    />
+                  </div>
+                  <div className="flex items-center space-x-2">
+                    <span className="text-white/80 text-sm w-12">Angle:</span>
+                    <input
+                      type="number"
+                      value={tempInputValues.angle}
+                      onChange={(e) => handleLaserEdit('angle', e.target.value)}
+                      className="w-24 bg-white/10 text-white text-sm px-3 py-1 rounded border border-white/20 focus:border-blue-400 focus:outline-none"
+                      step="0.1"
+                    />
+                    <span className="text-white/60 text-xs">°</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Black hole disk */}
         <div
